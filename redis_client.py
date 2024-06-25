@@ -134,7 +134,7 @@ def main():
     if args[1] == "3":
         print("------------------Running Tests----------------------")
         start = time.time()
-        cnt = 100
+        cnt = 10000
         device_id_lst = []
         while cnt > 0:
             num = random.randint(1, 100000)
@@ -154,7 +154,7 @@ def main():
                 "expirationTime": 1624198696,
                 "tMsgRecvByServer": int(time.time()),
                 "tMsgRecvFromDev": 1624197701,
-                "audioPlayed": random.randint(0, 5),
+                "audioPlayed": random.randint(0, 1),
                 "id": 9876543210 + num,
             }
             device_id_lst.append(data["deviceId"])
