@@ -48,9 +48,10 @@ def connect_to_redis():
         print("An Error Occured....")
         return str(e), True
 
-
+# Hashmap functions
 def set_dict(key, data_dict, r):
     r.hset(key, mapping=data_dict)
+
 
 
 def set_json_value(key, data_dict, r):
@@ -71,6 +72,9 @@ def run_redis_cli_cmd(cmd):
 
 def update_audio_played(key, r):
     r.json().set(key, "$.audioPlayed", random.randint(1, 5))
+
+def update_audio_played_hash(key, r):
+    r.hset(key, "audioPlayed", random.randint(1, 5))
 
 
 def main():
@@ -134,7 +138,7 @@ def main():
     if args[1] == "3":
         print("------------------Running Tests----------------------")
         start = time.time()
-        cnt = 10000
+        cnt = 100
         device_id_lst = []
         while cnt > 0:
             num = random.randint(1, 100000)
@@ -160,11 +164,11 @@ def main():
             device_id_lst.append(data["deviceId"])
             # Create a unique key
             unique_key = uuid.uuid4().hex
-            set_json_value(f"transaction:{unique_key}", data, r)
+            set_dict(f"transaction:{unique_key}", data, r)
             temp = cnt
             if temp % 5 == 0 and data["audioPlayed"] <= 0:
                 # Update the `audioPlayed` field to a value greater than 0
-                update_audio_played(f"transaction:{unique_key}", r)
+                update_audio_played_hash(f"transaction:{unique_key}", r)
             cnt -= 1
         total_length = len(device_id_lst)
         distinct_length = len(set(device_id_lst))

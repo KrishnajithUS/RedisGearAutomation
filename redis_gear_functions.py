@@ -100,42 +100,55 @@ def store_expired_data(data=None):
 
         # Get each key in key set
         for key in keys:
-            with atomic():
-                # Convert string to dict
-                get_value = json.loads(execute("json.get", key))
-                # Get Creation time
-                tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)
-                device_id = get_value.get("deviceId", None)
-                if tmsg_recvby_server is None or not isinstance(tmsg_recvby_server, int):
-                    log(
-                        f"tMsgRecvByServer Key Not Found or tMsgRecvByServer is Not an Integer For Key {key}!"
+            # Convert string to dict
+            hset_list = execute("hgetall", key)
+
+            get_value = {}
+
+            integer_fields = ["transactionType","transactionMode","timeStamp","deviceId","expirationTime","tMsgRecvByServer","tMsgRecvFromDev","audioPlayed","id"]
+
+            for vals in range(0, len(hset_list), 2):
+                # convert string to integer
+                try :
+                    if hset_list[vals] in integer_fields:
+                        hset_list[vals+1] = int(hset_list[vals+1])
+                except Exception as e:
+                    log(f"-----Unable to convert {hset_list[vals+1]} to an integer for Field {hset_list[vals]}")
+                get_value[hset_list[vals]] = hset_list[vals+1]
+
+            # Get Creation time
+            tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)
+            device_id = get_value.get("deviceId", None)
+            if tmsg_recvby_server is None or not isinstance(tmsg_recvby_server, int):
+                log(
+                    f"tMsgRecvByServer Key Not Found or tMsgRecvByServer is Not an Integer For Key {key}!"
+                )
+                continue
+
+            if device_id  is None:
+                log(f"DeviceId is Missing For Key {key}")
+                continue
+
+            exipiry_time_key = tmsg_recvby_server + MOVEMENT_TIME
+            # Compare whether the key is expired
+            if exipiry_time_key < epoch_time_now:
+                log(f"------- Key {key} Expired -------")
+                client = dbConnObj.get_db_client
+                db = client[dbConnObj.get_database_name]
+                collection = db[dbConnObj.get_collection_name]
+                if (
+                    collection.count_documents(
+                        {"tMsgRecvByServer": tmsg_recvby_server,"DeviceId":device_id}, limit=1
                     )
-                    continue
-
-                if device_id  is None:
-                    log(f"DeviceId is Missing For Key {key}")
-                    continue
-
-                exipiry_time_key = tmsg_recvby_server + MOVEMENT_TIME
-                # Compare whether the key is expired
-                if exipiry_time_key < epoch_time_now:
-                    log(f"------- Key {key} Expired -------")
-                    client = dbConnObj.get_db_client
-                    db = client[dbConnObj.get_database_name]
-                    collection = db[dbConnObj.get_collection_name]
-                    if (
-                        collection.count_documents(
-                            {"tMsgRecvByServer": tmsg_recvby_server,"DeviceId":device_id}, limit=1
-                        )
-                        != 0
-                    ):
-                        log("----------Document Already Exist With This tMsgRecvByServer----------")
-                    else:
-                        log(f"------Inserting data : key {key}------")
-                        collection.insert_one(get_value)
-                    # Delete the key from Redis
-                    execute("json.del", key)
-                    log("Data inserted into MongoDB and deleting from Redis")
+                    != 0
+                ):
+                    log("----------Document Already Exist With This tMsgRecvByServer----------")
+                else:
+                    log(f"------Inserting data : key {key}------")
+                    collection.insert_one(get_value)
+                # Delete the key from Redis
+                execute("del", key)
+                log("Data inserted into MongoDB and deleting from Redis")
 
     # Reset the job key with the JOB_INTERVAL
     execute("set", "jobkey{%s}" % hashtag(), "val", "EX", str(JOB_INTERVAL))
@@ -154,7 +167,22 @@ def write_updates_to_db(data):
     )
     
     key = data.get("key")
-    get_value = json.loads(execute("json.get", key))
+    hset_list = execute("hgetall", key)
+
+    # convert hset to a dict
+    get_value = {}
+
+    integer_fields = ["transactionType","transactionMode","timeStamp","deviceId","expirationTime","tMsgRecvByServer","tMsgRecvFromDev","audioPlayed","id"]
+
+    for vals in range(0, len(hset_list), 2):
+        # convert string to integer
+        try :
+            if hset_list[vals] in integer_fields:
+                hset_list[vals+1] = int(hset_list[vals+1])
+        except Exception as e:
+            log(f"-----Unable to convert {hset_list[vals+1]} to an integer for Field {hset_list[vals]}")
+        get_value[hset_list[vals]] = hset_list[vals+1]
+    log(f"----------dict {get_value}")
     is_audio_played = get_value.get("audioPlayed", None)
     tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)
     device_id = get_value.get("deviceId", None)
@@ -164,24 +192,23 @@ def write_updates_to_db(data):
     elif tmsg_recvby_server is None or not isinstance(tmsg_recvby_server, int):
         log("tMsgRecvByServer Key Not Found or tMsgRecvByServer is Not an Integer!")
     elif is_audio_played > 0:
-        with atomic():
-            log(f"------audioPlayed is updated for key {key}------")
-            client = dbConnObj.get_db_client
-            db = client[dbConnObj.get_database_name]
-            collection = db[dbConnObj.get_collection_name]
-            if (
-                collection.count_documents(
-                {"tMsgRecvByServer": tmsg_recvby_server,"DeviceId":device_id}, limit=1
-                )
-                != 0
-            ):
-                log("----------Document Already Exist With This tMsgRecvByServer")
-            else:
-                log(f"------Inserting data : key {key}------")
-                collection.insert_one(get_value)
-            # Delete the key from Redis
-            execute("json.del", key)
-            log("Data inserted into MongoDB and deleting from Redis")
+        log(f"------audioPlayed is updated for key {key}------")
+        client = dbConnObj.get_db_client
+        db = client[dbConnObj.get_database_name]
+        collection = db[dbConnObj.get_collection_name]
+        if (
+            collection.count_documents(
+            {"tMsgRecvByServer": tmsg_recvby_server,"DeviceId":device_id}, limit=1
+            )
+            != 0
+        ):
+            log("----------Document Already Exist With This tMsgRecvByServer")
+        else:
+            log(f"------Inserting data : key {key}------")
+            collection.insert_one(get_value)
+        # Delete the key from Redis
+        execute("del", key)
+        log("Data inserted into MongoDB and deleting from Redis")
 
 
 # Set Expiry On Every Key With Prefix transaction
@@ -211,7 +238,7 @@ gbUpdate.foreach(
     lambda x: log("Setting Up the Write & Update Event Listening Functions")
 ).foreach(lambda x: write_updates_to_db(x)).register(
     prefix=f"{PREFIX}:*",
-    eventTypes=["json.set"],
+    eventTypes=["hset", "hmset"],
     readValue=False,
     mode="sync",
 )
