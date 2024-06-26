@@ -80,6 +80,20 @@ class DBConnect:
         return self.db_name
 
 
+def list_to_dict(hset_list):
+    get_value = {}
+    integer_fields = ["transactionType","transactionMode","timeStamp","deviceId","expirationTime","tMsgRecvByServer","tMsgRecvFromDev","audioPlayed","id"]
+
+    for vals in range(0, len(hset_list), 2):
+        # convert string to integer
+        try :
+            if hset_list[vals] in integer_fields:
+                hset_list[vals+1] = int(hset_list[vals+1])
+        except Exception as e:
+            log(f"-----Unable to convert {hset_list[vals+1]} to an integer for Field {hset_list[vals]}")
+        get_value[hset_list[vals]] = hset_list[vals+1]
+    return get_value
+        
 def store_expired_data(data=None):
     if data:
         dbConnObj = DBConnect()
@@ -103,18 +117,7 @@ def store_expired_data(data=None):
             # Convert string to dict
             hset_list = execute("hgetall", key)
 
-            get_value = {}
-
-            integer_fields = ["transactionType","transactionMode","timeStamp","deviceId","expirationTime","tMsgRecvByServer","tMsgRecvFromDev","audioPlayed","id"]
-
-            for vals in range(0, len(hset_list), 2):
-                # convert string to integer
-                try :
-                    if hset_list[vals] in integer_fields:
-                        hset_list[vals+1] = int(hset_list[vals+1])
-                except Exception as e:
-                    log(f"-----Unable to convert {hset_list[vals+1]} to an integer for Field {hset_list[vals]}")
-                get_value[hset_list[vals]] = hset_list[vals+1]
+            get_value = list_to_dict(hset_list)
 
             # Get Creation time
             tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)
@@ -170,19 +173,8 @@ def write_updates_to_db(data):
     hset_list = execute("hgetall", key)
 
     # convert hset to a dict
-    get_value = {}
+    get_value = list_to_dict(hset_list)
 
-    integer_fields = ["transactionType","transactionMode","timeStamp","deviceId","expirationTime","tMsgRecvByServer","tMsgRecvFromDev","audioPlayed","id"]
-
-    for vals in range(0, len(hset_list), 2):
-        # convert string to integer
-        try :
-            if hset_list[vals] in integer_fields:
-                hset_list[vals+1] = int(hset_list[vals+1])
-        except Exception as e:
-            log(f"-----Unable to convert {hset_list[vals+1]} to an integer for Field {hset_list[vals]}")
-        get_value[hset_list[vals]] = hset_list[vals+1]
-    log(f"----------dict {get_value}")
     is_audio_played = get_value.get("audioPlayed", None)
     tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)
     device_id = get_value.get("deviceId", None)
