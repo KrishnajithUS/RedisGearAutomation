@@ -4,6 +4,8 @@ import time
 import random
 import sys
 import uuid
+from datetime import datetime
+
 
 
 SESSION_ID = "transactionRedisDbOperations"
@@ -12,7 +14,7 @@ SESSION_ID = "transactionRedisDbOperations"
 def formatPassFunctionCmd(file_name, requirements):
     req = "REQUIREMENTS"
     cmd = (
-        f'sudo docker exec -it redis-gear redis-cli RG.PYEXECUTE  "`cat {file_name}`"  '
+        f'docker exec -it redis-gear redis-cli RG.PYEXECUTE  "`cat {file_name}`"  '
     )
     # Add ID & UPGRADE(to prevent duplicate register functions)
     cmd += f"ID {SESSION_ID} UPGRADE "
@@ -48,9 +50,10 @@ def connect_to_redis():
         print("An Error Occured....")
         return str(e), True
 
-
+# Hashmap functions
 def set_dict(key, data_dict, r):
     r.hset(key, mapping=data_dict)
+
 
 
 def set_json_value(key, data_dict, r):
@@ -71,6 +74,9 @@ def run_redis_cli_cmd(cmd):
 
 def update_audio_played(key, r):
     r.json().set(key, "$.audioPlayed", random.randint(1, 5))
+
+def update_audio_played_hash(key, r):
+    r.hset(key, "audioPlayed", random.randint(1, 5))
 
 
 def main():
@@ -99,12 +105,13 @@ def main():
     if args[1] == "1":
         print("--------------Passing Function To RedisGear To Execute------------")
         get_cmd = CMDS["PassFunctionToRedis"](
-            "redis_gear_functions.py", ["pymongo", "python-dotenv"]
+            "redis_gear_functions_with_motor.py", ["pymongo","motor"]
         )
         run_redis_cli_cmd(get_cmd)
 
     # SET a single entry to redis
     if args[1] == "2":
+
         print("--------------Creating A New JSON data in Redis------------")
         num = random.randint(1, 100000)
         data = {
@@ -134,8 +141,9 @@ def main():
     if args[1] == "3":
         print("------------------Running Tests----------------------")
         start = time.time()
-        cnt = 100
+        cnt = 10000
         device_id_lst = []
+        print(f"current time : {datetime.now()}")
         while cnt > 0:
             num = random.randint(1, 100000)
             data = {
@@ -154,17 +162,17 @@ def main():
                 "expirationTime": 1624198696,
                 "tMsgRecvByServer": int(time.time()),
                 "tMsgRecvFromDev": 1624197701,
-                "audioPlayed": random.randint(0, 5),
+                "audioPlayed": random.randint(0, 1),
                 "id": 9876543210 + num,
             }
             device_id_lst.append(data["deviceId"])
             # Create a unique key
             unique_key = uuid.uuid4().hex
-            set_json_value(f"transaction:{unique_key}", data, r)
+            set_dict(f"transaction:{unique_key}", data, r)
             temp = cnt
             if temp % 5 == 0 and data["audioPlayed"] <= 0:
                 # Update the `audioPlayed` field to a value greater than 0
-                update_audio_played(f"transaction:{unique_key}", r)
+                update_audio_played_hash(f"transaction:{unique_key}", r)
             cnt -= 1
         total_length = len(device_id_lst)
         distinct_length = len(set(device_id_lst))

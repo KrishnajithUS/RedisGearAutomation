@@ -16,8 +16,6 @@ config = {
 
 }
 
-log(f'config : {config}')
-
 JOB_INTERVAL = config['JOB_INTERVAL']
 PREFIX = config['PREFIX']
 MOVEMENT_TIME = config['MOVEMENT_TIME']
@@ -82,66 +80,63 @@ class DBConnect:
         return self.db_name
 
 
-def store_expired_data(data=None):
-    if data:
-        dbConnObj = DBConnect()
-        res = dbConnObj.connect_to_db()
-        if not res:
-            log(
-                "-------DB connection error store_expired_data Function Not Registered Properly------"
+def list_to_dict(hset_list):
+    get_value = {}
+    integer_fields = ["transactionType","transactionMode","timeStamp","deviceId","expirationTime","tMsgRecvByServer","tMsgRecvFromDev","audioPlayed","id"]
+
+    for vals in range(0, len(hset_list), 2):
+        # convert string to integer
+        try :
+            if hset_list[vals] in integer_fields:
+                hset_list[vals+1] = int(hset_list[vals+1])
+        except Exception as e:
+            log(f"-----Unable to convert {hset_list[vals+1]} to an integer for Field {hset_list[vals]}")
+        get_value[hset_list[vals]] = hset_list[vals+1]
+    return get_value
+
+async def update_data(collection, key, device_id, tmsg_recvby_server, get_value):
+    exists = int(execute("exists", key))
+    if exists:
+        log(f"------audioPlayed is updated for key {key}------")
+        if (
+            collection.count_documents(
+            {"tMsgRecvByServer": tmsg_recvby_server,"DeviceId":device_id}, limit=1
             )
-            return
-        log(
-            "-------------------Transaction For Inserting Expired Data to DB-------------------"
-        )
+            != 0
+        ):
+            log("----------Document Already Exist With This tMsgRecvByServer")
+        else:
+            log(f"------Inserting data : key {key}------")
+            collection.insert_many([get_value])
+        # Delete the key from Redis
+        execute("del", key)
+        log("Data inserted into MongoDB and deleting from Redis")
+        return True
+    return False
 
-        # Get all keys which belongs to transaction
-        keys = execute("keys", f"{PREFIX}:*")
-        # Get current time
-        epoch_time_now = int(time.time())
-        # Get each key in key set
-        for key in keys:
-            # Convert string to dict
-            get_value = json.loads(execute("json.get", key))
-            # Get Creation time
-            tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)
-            device_id = get_value.get("deviceId", None)
-            if tmsg_recvby_server is None or not isinstance(tmsg_recvby_server, int):
-                log(
-                    f"tMsgRecvByServer Key Not Found or tMsgRecvByServer is Not an Integer For Key {key}!"
-                )
-                continue
-
-            if device_id  is None:
-                log(f"DeviceId is Missing For Key {key}")
-                continue
-
-            exipiry_time_key = tmsg_recvby_server + MOVEMENT_TIME
-            # Compare whether the key is expired
-            if exipiry_time_key < epoch_time_now:
-                log(f"------- Key {key} Expired -------")
-                client = dbConnObj.get_db_client
-                db = client[dbConnObj.get_database_name]
-                collection = db[dbConnObj.get_collection_name]
-                if (
-                    collection.count_documents(
-                        {"tMsgRecvByServer": tmsg_recvby_server,"DeviceId":device_id}, limit=1
-                    )
-                    != 0
-                ):
-                    log("----------Document Already Exist With This tMsgRecvByServer----------")
-                else:
-                    log(f"------Inserting data : key {key}------")
-                    collection.insert_one(get_value)
-                # Delete the key from Redis
-                execute("json.del", key)
-                log("Data inserted into MongoDB and deleting from Redis")
-
-    # Reset the job key with the JOB_INTERVAL
-    execute("set", "jobkey{%s}" % hashtag(), "val", "EX", str(JOB_INTERVAL))
+async def insert_data(collection, key, device_id, tmsg_recvby_server, get_value):
+    # await asyncio.sleep(100)
+    exists = int(execute("exists", key))
+    if exists == 1:
+        log(f"------{key} is Expired, Inserting Data To MongoDB------")
+        if (
+            collection.count_documents(
+            {"tMsgRecvByServer": tmsg_recvby_server,"DeviceId":device_id}, limit=1
+            )
+            != 0
+        ):
+            log("----------Document Already Exist With This tMsgRecvByServer")
+        else:
+            log(f"------Inserting data : key {key}------")
+            collection.insert_many([get_value])
+        # Delete the key from Redis
+        execute("del", key)
+        log("Data inserted into MongoDB and deleting from Redis")
+        return True
+    return False
 
 
-def write_updates_to_db(data):
+def write_data_to_db(data):
     dbConnObj = DBConnect()
     res = dbConnObj.connect_to_db()
     if not res:
@@ -154,63 +149,40 @@ def write_updates_to_db(data):
     )
     
     key = data.get("key")
-    get_value = json.loads(execute("json.get", key))
+    hset_list = execute("hgetall", key)
+
+    # convert hset to a dict
+    get_value = list_to_dict(hset_list)
+
     is_audio_played = get_value.get("audioPlayed", None)
     tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)
     device_id = get_value.get("deviceId", None)
-    
+
+    # MongoDB connection
+    client = dbConnObj.get_db_client
+    db = client[dbConnObj.get_database_name]
+    collection = db[dbConnObj.get_collection_name]    
+
+
     if is_audio_played is None or not isinstance(is_audio_played, int):
         log("audioPlayed Key Not Found or audioPlayed is Not an Integer!")
     elif tmsg_recvby_server is None or not isinstance(tmsg_recvby_server, int):
         log("tMsgRecvByServer Key Not Found or tMsgRecvByServer is Not an Integer!")
     elif is_audio_played > 0:
-        log(f"------audioPlayed is updated for key {key}------")
-        client = dbConnObj.get_db_client
-        db = client[dbConnObj.get_database_name]
-        collection = db[dbConnObj.get_collection_name]
-        if (
-            collection.count_documents(
-               {"tMsgRecvByServer": tmsg_recvby_server,"DeviceId":device_id}, limit=1
-            )
-            != 0
-        ):
-            log("----------Document Already Exist With This tMsgRecvByServer")
-        else:
-            log(f"------Inserting data : key {key}------")
-            collection.insert_one(get_value)
-        # Delete the key from Redis
-        execute("json.del", key)
-        log("Data inserted into MongoDB and deleting from Redis")
+        log("---------------Entering update_data---------------")
+        return  update_data(collection, key, device_id, tmsg_recvby_server, get_value)
+    else:
+        log("---------------Entering insert_data---------------")
+        return insert_data(collection, key, device_id, tmsg_recvby_server, get_value)
 
 
-# Set Expiry On Every Key With Prefix transaction
-# This is a default expiry key which will always be greater than the actual expiry time
-gbExpiry = GB()
-
-gbExpiry.foreach(lambda x: execute("EXPIRE", x["key"], str(EXPIRY_TIME)))
-gbExpiry.foreach(lambda x: log(f"TTL For Key {x['key']} {execute('TTL', x['key'])}"))
-gbExpiry.register(f"{PREFIX}:*", mode="sync", readValue=False)
-
-# Register the RedisGears function
-gbCron = GB()
-# This event will trigger on each JOB INTERVAL, Hence acting as a cron function
-gbCron.foreach(lambda x: log("Setting Up the Cron Function")).foreach(
-    lambda x: store_expired_data(x)
-).register(
-    prefix="jobkey*",
-    eventTypes=["expired"],
-    readValue=False,
-    mode="sync",
-    onRegistered=store_expired_data,
-)
 
 gbUpdate = GB()
 # This event will trigger on set event on transaction data
 gbUpdate.foreach(
-    lambda x: log("Setting Up the Write & Update Event Listening Functions")
-).foreach(lambda x: write_updates_to_db(x)).register(
+    lambda x: log("Setting Up the Coroutine For Data processing......")
+).foreach(lambda x: write_data_to_db(x)).register(
     prefix=f"{PREFIX}:*",
-    eventTypes=["json.set"],
+    eventTypes=["hset", "hmset"],
     readValue=False,
-    mode="sync",
 )
