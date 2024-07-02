@@ -144,8 +144,11 @@ def main():
         cnt = 10000
         device_id_lst = []
         print(f"current time : {datetime.now()}")
+        incr = 0
+        updated_data_cnt = 0
         while cnt > 0:
             num = random.randint(1, 100000)
+            incr += 1
             data = {
                 "reqRefNo": f"REQ123456789{num}",
                 "rrn": "RRN987654321",
@@ -158,26 +161,29 @@ def main():
                 "txnAmt": "100.50",
                 "txnTimestamp": "2024-06-22T12:34:56Z",
                 "timeStamp": int(time.time()),
-                "deviceId": 1234567890 + cnt,
+                "deviceId": 1234567890,
                 "expirationTime": 1624198696,
                 "tMsgRecvByServer": int(time.time()),
                 "tMsgRecvFromDev": 1624197701,
-                "audioPlayed": random.randint(0, 1),
-                "id": 9876543210 + num,
+                "audioPlayed": random.randint(0, 0),
+                "id": incr,
             }
-            device_id_lst.append(data["deviceId"])
+
             # Create a unique key
-            unique_key = uuid.uuid4().hex
+            unique_key = 1234567890 + incr
+            device_id_lst.append(unique_key)
             set_dict(f"transaction:{unique_key}", data, r)
             temp = cnt
             if temp % 5 == 0 and data["audioPlayed"] <= 0:
                 # Update the `audioPlayed` field to a value greater than 0
                 update_audio_played_hash(f"transaction:{unique_key}", r)
+                updated_data_cnt += 1
             cnt -= 1
         total_length = len(device_id_lst)
         distinct_length = len(set(device_id_lst))
         print("No of Duplcate Entries : ", total_length - distinct_length)
         end = time.time()
         print("diff :", end-start)
+        print("No of updated data : ", updated_data_cnt)
 if __name__ == "__main__":
     main()
