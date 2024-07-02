@@ -2,6 +2,7 @@ import time
 import pymongo
 import json
 import os
+import asyncio
 from threading import Lock
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -19,7 +20,6 @@ JOB_INTERVAL = config["JOB_INTERVAL"]
 PREFIX = config["PREFIX"]
 
 
-
 class DBConnect:
     _instance = None
 
@@ -33,7 +33,7 @@ class DBConnect:
         if self._initialized:
             return
         self.conn_string = config["CONN_STRING"]
-        self.client = AsyncIOMotorClient(self.conn_string)
+        self.client = AsyncIOMotorClient(self.conn_string, maxPoolSize=200)
         self.collection_name = config["COLLECTION_NAME"]
         self.db_name = config["DB_NAME"]
         self._initialized = True
@@ -41,6 +41,33 @@ class DBConnect:
     @property
     def get_db_client(self):
         return self.client
+
+    async def ping_connection(self, retries=3, delay=1):
+        if self.client is None :
+            return False
+        
+        for attempt in range(retries):
+            try:
+                await self.client.admin.command("ping")
+                log("Pinged your deployment. You successfully connected to MongoDB!")
+                return True
+            except Exception as e:
+                log(f"Ping attempt {attempt + 1} failed: {e}")
+                if attempt < retries - 1:
+                    await asyncio.sleep(delay)
+        return False
+
+    def reconnect(self, retries=3, delay=1):
+        for attempt in range(retries):
+            try:
+                self.client = AsyncIOMotorClient(self.conn_string, maxPoolSize=200)
+                log("Successfully reconnected to MongoDB!")
+                return self.client
+            except Exception as e:
+                log(f"Reconnection attempt {attempt + 1} failed: {e}")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+        return None
 
     @property
     def get_collection_name(self):
@@ -77,7 +104,7 @@ def list_to_dict(hset_list):
     return get_value
 
 
-async def upsert_data(collection, key):
+async def upsert_data(key, dbConnObj, retries=6, delay=5):
     exists = int(execute("exists", key))
 
     if exists == 0:
@@ -87,34 +114,46 @@ async def upsert_data(collection, key):
     get_value = list_to_dict(hset_list)
 
     is_audio_played = get_value.get("audioPlayed", None)
-    id = get_value.get("id", None)
-    device_id = get_value.get("deviceId", None)
 
     if is_audio_played <= 0:
         global JOB_INTERVAL
-        await asyncio.sleep(300)
+        await asyncio.sleep(100)
         log(f"-----------Timer Finished For Key {key}-----------")
-        # check whether the key exists after the sleep
         exists = int(execute("exists", key))
         if exists == 0:
             return False
 
     log(f"-----------{key} is being processed-----------")
-    try:
-        # Only process key at once
-        newKey = f"__{key}__{key}"
-        execute("RENAME", key, newKey)
-        result = await collection.update_one(
-            {"id": id, "deviceId": device_id}, {"$set": get_value}, upsert=True
-        )
-    except Exception as e:
-        log(f"------Error------ : {e}")
-        return False
+    for attempt in range(retries):
+        try:
+            if await dbConnObj.ping_connection():
+                log("----------Getting Existing Db Connection----------")
+                client = dbConnObj.get_db_client
+            else:
+                log("----------Creating A New Connection----------")
+                client = dbConnObj.reconnect()
+                if client is None:
+                    log("Failed to reconnect to MongoDB.")
+                    return False
 
-    if result.upserted_id is not None:
-        log(f"-----------Inserted data: key {key}-----------")
-    else:
-        log(f"-----------Updated data: key {key}-----------")
+            db = client[dbConnObj.get_database_name]
+            collection = db[dbConnObj.get_collection_name]
+            newKey = f"__{key}__{key}"
+            exists = int(execute("exists", newKey))
+            if exists == 0:
+                execute("RENAME", key, newKey)
+            await collection.insert_one(get_value)
+            break
+        except pymongo.errors.AutoReconnect as e:
+            log(f"AutoReconnect error: {e}. Retrying {attempt + 1}/{retries}...")
+            if attempt < retries - 1:
+                await asyncio.sleep(delay)
+            else:
+                log("Max retries reached. Failed to insert data.")
+                return False
+        except Exception as e:
+            log(f"------Error------ : {e}")
+            return False
 
     execute("del", newKey)
     log("Data inserted into MongoDB and deleted from Redis")
@@ -122,16 +161,12 @@ async def upsert_data(collection, key):
 
 
 def write_data_to_db(data):
-    dbConnObj = DBConnect()
     log("-----------Transaction For Inserting Updated Data to DB-----------")
 
     key = data.get("key")
+    dbConnObj = DBConnect()
 
-    client = dbConnObj.get_db_client
-    db = client[dbConnObj.get_database_name]
-    collection = db[dbConnObj.get_collection_name]
-
-    return upsert_data(collection, key)
+    return upsert_data(key, dbConnObj)
 
 
 gbUpdate = GB()
