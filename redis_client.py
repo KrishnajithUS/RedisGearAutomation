@@ -153,7 +153,7 @@ def main():
         incr = 0
         updated_data_cnt = 0
         for i in range(1):
-            cnt = 600000
+            cnt = 20
             while cnt > 0:
                 num = random.randint(1, 100000)
                 incr += 1
