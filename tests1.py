@@ -1,4 +1,6 @@
 import time
+import json
+import pymongo
 
 
 def list_to_dict(hset_list):
@@ -31,8 +33,8 @@ def insertData(x):
     insert_data_batch_1 = 0
     cnt = 101
     for key in keys:
-        # cnt -= 1
-        # if cnt == 0:
+        cnt -= 1
+        # if cnt == 99:
         #     break
         # Convert string to dict
         hset_list = execute("hgetall", key)
@@ -64,9 +66,20 @@ def insertData(x):
             expiredCnt += 1
         # insert_data_batch_1.append(get_value)
         insert_data_batch_1 += 1
-        execute("rpush", "temp_list", str(get_value))
+        execute("rpush", "temp_list", json.dumps(get_value))
     temp = execute("lrange","temp_list", str(0), str(-1))
-    log(f"-------List : {len(temp)}------")
+    log(f"temp list {type(temp)}")
+    for i in range(0, len(temp)):
+        temp[i] = json.loads(temp[i])
+        if len(temp) == 10000:
+            log("data inserting")
+            client = pymongo.MongoClient("mongodb://sa:Password123@mongo-1:27017,mongo-2:27017,mongo-3:27017/?replicaSet=rs0")
+            db = client["TransactionHistory"]
+            collection = db["TransactionExpiredDataCollection"]
+            collection.insert_many(temp[:10000])
+            del temp[:10000]
+
+    log(f"-------List : {type(temp[0])}------")
     end_time = time.time()
     log(f"time diff :{end_time - start_time}") 
     log(f"audio updated count : {audioCnt}")
