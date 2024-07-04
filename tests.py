@@ -64,4 +64,4 @@ def process_transactions(x):
     return 
 
 # Register the function as a Gears function to be triggered by a cron job or some other mechanism
-GearsBuilder().map(lambda x: process_transactions(x)).run("person:*")
+GearsBuilder().map(lambda x: process_transactions(x)).run("newperson:*")

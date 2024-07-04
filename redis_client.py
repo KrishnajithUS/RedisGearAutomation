@@ -103,7 +103,7 @@ def main():
     if args[1] == "1":
         print("--------------Passing Function To RedisGear To Execute------------")
         get_cmd = CMDS["PassFunctionToRedis"](
-            "tests.py", ["pymongo", "python-dotenv"]
+            "tests1.py", ["pymongo", "python-dotenv"]
         )
         run_redis_cli_cmd(get_cmd)
 
