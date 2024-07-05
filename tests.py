@@ -1,19 +1,6 @@
 import time
+import json
 
-
-def list_to_dict(hset_list):
-    get_value = {}
-    integer_fields = ["transactionType","transactionMode","timeStamp","deviceId","expirationTime","tMsgRecvByServer","tMsgRecvFromDev","audioPlayed","id"]
-
-    for vals in range(0, len(hset_list), 2):
-        # convert string to integer
-        try :
-            if hset_list[vals] in integer_fields:
-                hset_list[vals+1] = int(hset_list[vals+1])
-        except Exception as e:
-            log(f"-----Unable to convert {hset_list[vals+1]} to an integer for Field {hset_list[vals]}")
-        get_value[hset_list[vals]] = hset_list[vals+1]
-    return get_value
 
 
 
@@ -35,9 +22,8 @@ def insertData(x):
         # if cnt == 0:
         #     break
         # Convert string to dict
-        hset_list = execute("hgetall", key)
+        get_value = json.loads(execute("json.get", key))
 
-        get_value = list_to_dict(hset_list)
 
         # Get Creation time
         tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)

@@ -79,7 +79,6 @@ class DBConnect:
     def get_database_name(self):
         return self.db_name
 
-
 def store_expired_data(data=None):
     if data:
         dbConnObj = DBConnect()
@@ -93,10 +92,63 @@ def store_expired_data(data=None):
             "-------------------Transaction For Inserting Expired Data to DB-------------------"
         )
 
-        # Get all keys which belongs to transaction
+        # Get all keys which belong to the transaction
         keys = execute("keys", f"{PREFIX}:*")
         # Get current time
         epoch_time_now = int(time.time())
+
+        expired_documents = []
+        keys_to_delete = []
+
+        def insert_batch_documents(documents, keys):
+            retries = 3
+            while retries > 0:
+                try:
+                    client = dbConnObj.get_db_client
+                    db = client[dbConnObj.get_database_name]
+                    collection = db[dbConnObj.get_collection_name]
+                    
+                    # Check if documents already exist
+                    existing_documents = collection.find(
+                        {"tMsgRecvByServer": {"$in": [doc["tMsgRecvByServer"] for doc in documents]},
+                         "DeviceId": {"$in": [doc["deviceId"] for doc in documents]}}
+                    )
+                    existing_docs_set = set((doc["tMsgRecvByServer"], doc["DeviceId"]) for doc in existing_documents)
+
+                    # Filter out existing documents
+                    new_documents = [
+                        doc for doc in documents
+                        if (doc["tMsgRecvByServer"], doc["deviceId"]) not in existing_docs_set
+                    ]
+                    
+                    if new_documents:
+                        log(f"------Inserting batch data------")
+                        collection.insert_many(new_documents)
+
+                    return True  # Success
+                except Exception as e:
+                    log(f"Error during batch insertion: {str(e)}")
+                    retries -= 1
+                    if retries > 0:
+                        log(f"Retrying... {retries} attempts left")
+                        time.sleep(5)
+            return False  # Failure
+
+        def delete_keys_from_redis(keys):
+            retries = 3
+            while retries > 0:
+                try:
+                    for key in keys:
+                        execute("json.del", key)
+                    log("Data inserted into MongoDB and keys deleted from Redis")
+                    return True  # Success
+                except Exception as e:
+                    log(f"Error during key deletion: {str(e)}")
+                    retries -= 1
+                    if retries > 0:
+                        log(f"Retrying... {retries} attempts left")
+                        time.sleep(5)
+            return False  # Failure
 
         # Get each key in key set
         for key in keys:
@@ -112,34 +164,46 @@ def store_expired_data(data=None):
                     )
                     continue
 
-                if device_id  is None:
+                if device_id is None:
                     log(f"DeviceId is Missing For Key {key}")
                     continue
 
-                exipiry_time_key = tmsg_recvby_server + MOVEMENT_TIME
+                expiry_time_key = tmsg_recvby_server + MOVEMENT_TIME
                 # Compare whether the key is expired
-                if exipiry_time_key < epoch_time_now:
+                if expiry_time_key < epoch_time_now:
                     log(f"------- Key {key} Expired -------")
-                    client = dbConnObj.get_db_client
-                    db = client[dbConnObj.get_database_name]
-                    collection = db[dbConnObj.get_collection_name]
-                    if (
-                        collection.count_documents(
-                            {"tMsgRecvByServer": tmsg_recvby_server,"DeviceId":device_id}, limit=1
-                        )
-                        != 0
-                    ):
-                        log("----------Document Already Exist With This tMsgRecvByServer----------")
-                    else:
-                        log(f"------Inserting data : key {key}------")
-                        collection.insert_one(get_value)
-                    # Delete the key from Redis
-                    execute("json.del", key)
-                    log("Data inserted into MongoDB and deleting from Redis")
+                    expired_documents.append(get_value)
+                    keys_to_delete.append(key)
+
+                    # Insert documents in batches
+                    if len(expired_documents) >= 100:
+                        success = insert_batch_documents(expired_documents, keys_to_delete)
+                        if not success:
+                            log("Failed to insert batch documents after retries")
+                            return
+                        # Delete the keys from Redis in batches
+                        if not delete_keys_from_redis(keys_to_delete):
+                            log("Failed to delete keys from Redis after retries")
+                            return
+                        # Clear the batch lists
+                        expired_documents.clear()
+                        keys_to_delete.clear()
+
+        # Insert remaining documents
+        if expired_documents:
+            success = insert_batch_documents(expired_documents, keys_to_delete)
+            if not success:
+                log("Failed to insert remaining documents after retries")
+                return
+            # Delete the keys from Redis for remaining documents
+            if not delete_keys_from_redis(keys_to_delete):
+                log("Failed to delete remaining keys from Redis after retries")
+                return
 
     # Reset the job key with the JOB_INTERVAL
     execute("set", "jobkey{%s}" % hashtag(), "val", "EX", str(JOB_INTERVAL))
 
+                
 
 def write_updates_to_db(data):
     dbConnObj = DBConnect()

@@ -12,7 +12,7 @@ SESSION_ID = "transactionRedisDbOperations"
 def formatPassFunctionCmd(file_name, requirements):
     req = "REQUIREMENTS"
     cmd = (
-        f'sudo docker exec -it redis-gear redis-cli RG.PYEXECUTE  "`cat {file_name}`"  '
+        f'docker exec -it redis-gear redis-cli RG.PYEXECUTE  "`cat {file_name}`"  '
     )
     # Add ID & UPGRADE(to prevent duplicate register functions)
     cmd += f"ID {SESSION_ID} UPGRADE "
@@ -99,7 +99,7 @@ def main():
     if args[1] == "1":
         print("--------------Passing Function To RedisGear To Execute------------")
         get_cmd = CMDS["PassFunctionToRedis"](
-            "redis_gear_functions.py", ["pymongo", "python-dotenv"]
+            "cron.py", ["pymongo", "python-dotenv"]
         )
         run_redis_cli_cmd(get_cmd)
 
@@ -134,7 +134,7 @@ def main():
     if args[1] == "3":
         print("------------------Running Tests----------------------")
         start = time.time()
-        cnt = 10000
+        cnt = 1000000
         device_id_lst = []
         while cnt > 0:
             num = random.randint(1, 100000)
