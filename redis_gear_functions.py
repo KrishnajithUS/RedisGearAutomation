@@ -178,20 +178,21 @@ def store_expired_data(data=None):
                 # Get Creation time
                 tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)
                 device_id = get_value.get("deviceId", None)
+                audio_played = get_value.get("audioPlayed", None)
                 if tmsg_recvby_server is None or not isinstance(tmsg_recvby_server, int):
                     log(
                         f"tMsgRecvByServer Key Not Found or tMsgRecvByServer is Not an Integer For Key {key}!"
                     )
                     continue
 
-                if device_id  is None:
-                    log(f"DeviceId is Missing For Key {key}")
+                if audio_played  is None:
+                    log(f"audioPlayed is Missing For Key {key}")
                     continue
 
 
                 expiry_time_key = tmsg_recvby_server + MOVEMENT_TIME
 
-                if expiry_time_key < epoch_time_now:
+                if expiry_time_key < epoch_time_now or audio_played > 0:
                     log(f"------- Key {key} Expired -------")
                     expired_documents.append(get_value)
                     new_key = f"__{key}__{key}"
