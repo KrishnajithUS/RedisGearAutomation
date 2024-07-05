@@ -16,8 +16,8 @@ config = {
 
 }
 
-JOB_INTERVAL = config("JOB_INTERVAL")
-PREFIX = config("PREFIX")
+JOB_INTERVAL = config["JOB_INTERVAL"]
+PREFIX = config["PREFIX"]
 MOVEMENT_TIME = config['MOVEMENT_TIME']
 EXPIRY_TIME = MOVEMENT_TIME*config['MULTIPLIER']
 
@@ -93,7 +93,6 @@ def list_to_dict(hset_list):
     return get_value
         
 def store_expired_data(data=None):
-    log("sleeping")
     execute("set", "jobkey{%s}" % hashtag(), "val", "EX", str(JOB_INTERVAL))
 
     if data:
