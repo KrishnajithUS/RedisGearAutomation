@@ -103,7 +103,7 @@ def main():
     if args[1] == "1":
         print("--------------Passing Function To RedisGear To Execute------------")
         get_cmd = CMDS["PassFunctionToRedis"](
-            "tests1.py", ["pymongo", "python-dotenv"]
+            "redis_gear_functions.py", ["pymongo", "python-dotenv"]
         )
         run_redis_cli_cmd(get_cmd)
 
@@ -164,11 +164,11 @@ def main():
             device_id_lst.append(data["deviceId"])
             # Create a unique key
             unique_key = uuid.uuid4().hex
-            set_dict(f"transaction:{unique_key}", data, r)
+            set_dict(f"transaction_hset:{unique_key}", data, r)
             temp = cnt
             if temp % 5 == 0 and data["audioPlayed"] <= 0:
                 # Update the `audioPlayed` field to a value greater than 0
-                update_audio_played_hash(f"transaction:{unique_key}", r)
+                update_audio_played_hash(f"transaction_hset:{unique_key}", r)
             cnt -= 1
         total_length = len(device_id_lst)
         distinct_length = len(set(device_id_lst))

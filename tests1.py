@@ -5,7 +5,7 @@ import pymongo
 
 def list_to_dict(hset_list):
     get_value = {}
-    integer_fields = ["transactionType","transactionMode","timeStamp","deviceId","expirationTime","tMsgRecvByServer","tMsgRecvFromDev","audioPlayed","id"]
+    integer_fields = ["transaction_hsetType","transaction_hsetMode","timeStamp","deviceId","expirationTime","tMsgRecvByServer","tMsgRecvFromDev","audioPlayed","id"]
 
     for vals in range(0, len(hset_list), 2):
         # convert string to integer
@@ -21,8 +21,8 @@ def list_to_dict(hset_list):
 
 def insertData(x):
     log("isertData executing : ")
-    # Get all keys which belongs to transaction
-    keys = execute("keys", f"transaction:*")
+    # Get all keys which belongs to transaction_hset
+    keys = execute("keys", f"transaction_hset:*")
     log(f"----------No of Keys : {len(keys)}")
     audioCnt = 0
     expiredCnt = 0
@@ -30,7 +30,7 @@ def insertData(x):
     epoch_time_now = int(time.time())
     start_time = time.time()
     # Get each key in key set
-    insert_data_batch_1 = 0
+    insert_data_batch_1 = []
     cnt = 101
     for key in keys:
         cnt -= 1
@@ -64,27 +64,18 @@ def insertData(x):
         # # Compare whether the key is expired
         if exipiry_time_key < epoch_time_now:
             expiredCnt += 1
-        # insert_data_batch_1.append(get_value)
-        insert_data_batch_1 += 1
-        execute("rpush", "temp_list", json.dumps(get_value))
-    temp = execute("lrange","temp_list", str(0), str(-1))
-    log(f"temp list {type(temp)}")
-    for i in range(0, len(temp)):
-        temp[i] = json.loads(temp[i])
-        if len(temp) == 10000:
-            log("data inserting")
-            client = pymongo.MongoClient("mongodb://sa:Password123@mongo-1:27017,mongo-2:27017,mongo-3:27017/?replicaSet=rs0")
-            db = client["TransactionHistory"]
-            collection = db["TransactionExpiredDataCollection"]
-            collection.insert_many(temp[:10000])
-            del temp[:10000]
+        insert_data_batch_1.append(get_value)
+        # insert_data_batch_1 += 1
+        # execute("rpush", "temp_list", json.dumps(get_value))
+    # temp = execute("lrange","temp_list", str(0), str(-1))
+    # log(f"temp list {type(temp)}")
 
-    log(f"-------List : {type(temp[0])}------")
+    # log(f"-------List : {type(temp[0])}------")
     end_time = time.time()
     log(f"time diff :{end_time - start_time}") 
     log(f"audio updated count : {audioCnt}")
     log(f"expired data : {expiredCnt}")
-    log(f"len of batch : {insert_data_batch_1}")
+    log(f"len of batch : {len(insert_data_batch_1)}")
     return 
 
 

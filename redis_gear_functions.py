@@ -16,20 +16,13 @@ config = {
 
 }
 
-JOB_INTERVAL = config['JOB_INTERVAL']
-PREFIX = config['PREFIX']
+JOB_INTERVAL = config("JOB_INTERVAL")
+PREFIX = config("PREFIX")
 MOVEMENT_TIME = config['MOVEMENT_TIME']
 EXPIRY_TIME = MOVEMENT_TIME*config['MULTIPLIER']
 
 
-
 class DBConnect:
-    """
-
-    This class implements Singleton Pattern
-
-    """
-
     _instance = None
 
     def __new__(cls):
@@ -42,30 +35,35 @@ class DBConnect:
         if self._initialized:
             return
         self.conn_string = config['CONN_STRING']
-        self.client = None
+        self.client = pymongo.MongoClient(self.conn_string)
         self.collection_name = config['COLLECTION_NAME']
         self.db_name = config['DB_NAME']
         self.RETRY_CONN_COUNT = config['RETRY_CONN_COUNT']
         self._initialized = True
 
-    def connect_to_db(self) -> bool:
-        if self.client is None:
-            while self.RETRY_CONN_COUNT > 0:
-                try:
-                    self.client = pymongo.MongoClient(self.conn_string)
-                    db = self.client[self.db_name]
-                    self.collection = db[self.collection_name]
-                    log("Connected to DB")
-                    return True
-                except Exception as e:
-                    log(f"-----An Error Occurred During DB connection-----")
-                    log(f"Error : {str(e)}")
-                    log(f"Retrying connection after 5 seconds")
-                    time.sleep(5)
-                    self.RETRY_CONN_COUNT -= 1
-            log(f"-----DB connection failed-----")
-            return False
-        return True
+    def ping_connection(self, retries=3, delay=1):
+        for attempt in range(retries):
+            try:
+                self.client.admin.command('ping')
+                print("Pinged your deployment. You successfully connected to MongoDB!")
+                return True
+            except Exception as e:
+                print(f"Ping attempt {attempt + 1} failed: {e}")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+        return False
+
+    def reconnect(self, retries=3, delay=1):
+        for attempt in range(retries):
+            try:
+                self.client = pymongo.MongoClient(self.conn_string)
+                print("Successfully reconnected to MongoDB!")
+                return self.client
+            except Exception as e:
+                print(f"Reconnection attempt {attempt + 1} failed: {e}")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+        return None
 
     @property
     def get_db_client(self):
@@ -95,9 +93,12 @@ def list_to_dict(hset_list):
     return get_value
         
 def store_expired_data(data=None):
+    log("sleeping")
+    execute("set", "jobkey{%s}" % hashtag(), "val", "EX", str(JOB_INTERVAL))
+
     if data:
         dbConnObj = DBConnect()
-        res = dbConnObj.connect_to_db()
+        res = dbConnObj.ping_connection()
         if not res:
             log(
                 "-------DB connection error store_expired_data Function Not Registered Properly------"
@@ -107,109 +108,128 @@ def store_expired_data(data=None):
             "-------------------Transaction For Inserting Expired Data to DB-------------------"
         )
 
-        # Get all keys which belongs to transaction
         keys = execute("keys", f"{PREFIX}:*")
-        # Get current time
         epoch_time_now = int(time.time())
 
-        # Get each key in key set
-        for key in keys:
-            # Convert string to dict
-            hset_list = execute("hgetall", key)
+        expired_documents = []
+        keys_to_delete = []
+        renamed_keys = {}
 
-            get_value = list_to_dict(hset_list)
+        def insert_batch_documents(documents):
+            retries = 3
+            while retries > 0:
+                try:
+                    if dbConnObj.ping_connection():
+                        log("----------Getting Existing Db Connection----------")
+                        client = dbConnObj.get_db_client
+                    else:
+                        log("----------Creating A New Connection----------")
+                        client = dbConnObj.reconnect()
+                        if client is None:
+                            log("Failed to reconnect to MongoDB.")
+                            return False
+                    db = client[dbConnObj.get_database_name]
+                    collection = db[dbConnObj.get_collection_name]
 
-            # Get Creation time
-            tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)
-            device_id = get_value.get("deviceId", None)
-            if tmsg_recvby_server is None or not isinstance(tmsg_recvby_server, int):
-                log(
-                    f"tMsgRecvByServer Key Not Found or tMsgRecvByServer is Not an Integer For Key {key}!"
-                )
-                continue
+                    if documents:
+                        log(f"------Inserting batch data------")
+                        collection.insert_many(documents)
 
-            if device_id  is None:
-                log(f"DeviceId is Missing For Key {key}")
-                continue
+                    return True
+                except Exception as e:
+                    log(f"Error during batch insertion: {str(e)}")
+                    retries -= 1
+                    if retries > 0:
+                        log(f"Retrying... {retries} attempts left")
+                        time.sleep(5)
+            return False
 
-            exipiry_time_key = tmsg_recvby_server + MOVEMENT_TIME
-            # Compare whether the key is expired
-            if exipiry_time_key < epoch_time_now:
-                log(f"------- Key {key} Expired -------")
-                client = dbConnObj.get_db_client
-                db = client[dbConnObj.get_database_name]
-                collection = db[dbConnObj.get_collection_name]
-                if (
-                    collection.count_documents(
-                        {"tMsgRecvByServer": tmsg_recvby_server,"DeviceId":device_id}, limit=1
+        def delete_keys_from_redis(keys):
+            retries = 3
+            while retries > 0:
+                try:
+                    for key in keys:
+                        execute("del", key)
+                    log("Data inserted into MongoDB and keys deleted from Redis")
+                    return True
+                except Exception as e:
+                    log(f"Error during key deletion: {str(e)}")
+                    retries -= 1
+                    if retries > 0:
+                        log(f"Retrying... {retries} attempts left")
+                        time.sleep(5)
+            return False
+
+        def revert_renamed_keys(renamed_keys):
+            for new_key, original_key in renamed_keys.items():
+                try:
+                    execute('rename', new_key, original_key)
+                    log(f"Reverted key {new_key} back to {original_key}")
+                except Exception as e:
+                    log(f"Failed to revert key {new_key}: {str(e)}")
+
+        try:
+            for key in keys:
+                # Convert string to dict
+                hset_list = execute("hgetall", key)
+
+                get_value = list_to_dict(hset_list)
+
+                # Get Creation time
+                tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)
+                device_id = get_value.get("deviceId", None)
+                if tmsg_recvby_server is None or not isinstance(tmsg_recvby_server, int):
+                    log(
+                        f"tMsgRecvByServer Key Not Found or tMsgRecvByServer is Not an Integer For Key {key}!"
                     )
-                    != 0
-                ):
-                    log("----------Document Already Exist With This tMsgRecvByServer----------")
-                else:
-                    log(f"------Inserting data : key {key}------")
-                    collection.insert_one(get_value)
-                # Delete the key from Redis
-                execute("del", key)
-                log("Data inserted into MongoDB and deleting from Redis")
+                    continue
 
-    # Reset the job key with the JOB_INTERVAL
-    execute("set", "jobkey{%s}" % hashtag(), "val", "EX", str(JOB_INTERVAL))
+                if device_id  is None:
+                    log(f"DeviceId is Missing For Key {key}")
+                    continue
 
 
-def write_updates_to_db(data):
-    dbConnObj = DBConnect()
-    res = dbConnObj.connect_to_db()
-    if not res:
-        log(
-            "-------DB connection error write_updates_to_db Function Not Registered Properly------"
-        )
-        return
-    log(
-        "-------------------Transaction For Inserting Updated Data to DB-------------------"
-    )
-    
-    key = data.get("key")
-    hset_list = execute("hgetall", key)
+                expiry_time_key = tmsg_recvby_server + MOVEMENT_TIME
 
-    # convert hset to a dict
-    get_value = list_to_dict(hset_list)
+                if expiry_time_key < epoch_time_now:
+                    log(f"------- Key {key} Expired -------")
+                    expired_documents.append(get_value)
+                    new_key = f"__{key}__{key}"
+                    execute('rename', key, new_key)
+                    renamed_keys[new_key] = key
+                    keys_to_delete.append(new_key)
 
-    is_audio_played = get_value.get("audioPlayed", None)
-    tmsg_recvby_server = get_value.get("tMsgRecvByServer", None)
-    device_id = get_value.get("deviceId", None)
-    
-    if is_audio_played is None or not isinstance(is_audio_played, int):
-        log("audioPlayed Key Not Found or audioPlayed is Not an Integer!")
-    elif tmsg_recvby_server is None or not isinstance(tmsg_recvby_server, int):
-        log("tMsgRecvByServer Key Not Found or tMsgRecvByServer is Not an Integer!")
-    elif is_audio_played > 0:
-        log(f"------audioPlayed is updated for key {key}------")
-        client = dbConnObj.get_db_client
-        db = client[dbConnObj.get_database_name]
-        collection = db[dbConnObj.get_collection_name]
-        if (
-            collection.count_documents(
-            {"tMsgRecvByServer": tmsg_recvby_server,"DeviceId":device_id}, limit=1
-            )
-            != 0
-        ):
-            log("----------Document Already Exist With This tMsgRecvByServer")
-        else:
-            log(f"------Inserting data : key {key}------")
-            collection.insert_one(get_value)
-        # Delete the key from Redis
-        execute("del", key)
-        log("Data inserted into MongoDB and deleting from Redis")
+                    if len(expired_documents) >= 100000:
+                        success = insert_batch_documents(expired_documents)
+                        if not success:
+                            log("Failed to insert batch documents after retries")
+                            revert_renamed_keys(renamed_keys)
+                            return
+                        if not delete_keys_from_redis(keys_to_delete):
+                            log("Failed to delete keys from Redis after retries")
+                            revert_renamed_keys(renamed_keys)
+                            return
+                        expired_documents.clear()
+                        keys_to_delete.clear()
+                        renamed_keys.clear()
+
+            if expired_documents:
+                success = insert_batch_documents(expired_documents)
+                if not success:
+                    log("Failed to insert remaining documents after retries")
+                    revert_renamed_keys(renamed_keys)
+                    return
+                if not delete_keys_from_redis(keys_to_delete):
+                    log("Failed to delete remaining keys from Redis after retries")
+                    revert_renamed_keys(renamed_keys)
+                    return
+
+        except Exception as e:
+            log(f"Exception occurred: {str(e)}")
+            revert_renamed_keys(renamed_keys)
+            return
 
 
-# Set Expiry On Every Key With Prefix transaction
-# This is a default expiry key which will always be greater than the actual expiry time
-gbExpiry = GB()
-
-gbExpiry.foreach(lambda x: execute("EXPIRE", x["key"], str(EXPIRY_TIME)))
-gbExpiry.foreach(lambda x: log(f"TTL For Key {x['key']} {execute('TTL', x['key'])}"))
-gbExpiry.register(f"{PREFIX}:*", mode="sync", readValue=False)
 
 # Register the RedisGears function
 gbCron = GB()
@@ -220,17 +240,6 @@ gbCron.foreach(lambda x: log("Setting Up the Cron Function")).foreach(
     prefix="jobkey*",
     eventTypes=["expired"],
     readValue=False,
-    mode="sync",
     onRegistered=store_expired_data,
 )
 
-gbUpdate = GB()
-# This event will trigger on set event on transaction data
-gbUpdate.foreach(
-    lambda x: log("Setting Up the Write & Update Event Listening Functions")
-).foreach(lambda x: write_updates_to_db(x)).register(
-    prefix=f"{PREFIX}:*",
-    eventTypes=["hset", "hmset"],
-    readValue=False,
-    mode="sync",
-)
